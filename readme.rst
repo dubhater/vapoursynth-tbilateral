@@ -20,8 +20,9 @@ Parameters:
     *clip*
         Clip to denoise.
 
-        Must have constant format and dimensions and 8 bits per sample.
-        The dimensions must be multiples of 2.
+        Must have constant format and dimensions, 8..16 bits per
+        sample, and integer sample type. The dimensions must be
+        multiples of 2.
 
     *ppclip*
         Specifies a pre-filtered clip for TBilateral to take pixel

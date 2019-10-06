@@ -53,6 +53,8 @@ struct TBilateralData {
     int kernI;
     int resType;
 
+    int pixel_max;
+
     double *spatialWeights[3];
     double *diffWeights[3];
 
@@ -128,17 +130,12 @@ static void buildTables(TBilateralData *d) {
             d->spatialWeights[plane][x] = kernelValue(disTable[x], d->sDev[plane], d->kernS);
         d->spatialWeights[plane][radius * d->diameter[plane] + radius] *= d->cs[plane];
 
-        if (!d->d2) {
-            d->diffWeights[plane] = vs_aligned_malloc<double>(511 * sizeof(double), 16);
+        int diff_size = d->pixel_max * (d->d2 ? 4 : 2) + 1;
 
-            for (int x = 0; x < 256; ++x)
-                d->diffWeights[plane][255 + x] = d->diffWeights[plane][255 - x] = kernelValue(x, d->iDev[plane], d->kernI);
-        } else {
-            d->diffWeights[plane] = vs_aligned_malloc<double>(1021 * sizeof(double), 16);
+        d->diffWeights[plane] = vs_aligned_malloc<double>(diff_size * sizeof(double), 16);
 
-            for (int x = 0; x < 511; ++x)
-                d->diffWeights[plane][510 + x] = d->diffWeights[plane][510 - x] = kernelValue(x / 2.0, d->iDev[plane], d->kernI);
-        }
+        for (int x = 0; x <= diff_size / 2; ++x)
+            d->diffWeights[plane][diff_size / 2 + x] = d->diffWeights[plane][diff_size / 2 - x] = kernelValue(x / (d->d2 ? 2.0 : 1.0), d->iDev[plane], d->kernI);
 
         vs_aligned_free(disTable);
     }
@@ -502,17 +499,20 @@ static int mlre(double *yi, double *wi, int lw, int lh, int cx, int cy, int radi
 }
 
 
+template <typename PixelType>
 static void ProcessFrameD2_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSFrameRef *dst, const TBilateralData *d, const VSAPI *vsapi) {
+    const int pixel_max = d->pixel_max;
+
     for (int j = 0; j < 3; ++j) {
         if (!d->process[j])
             continue;
 
-        const uint8_t *srcp = vsapi->getReadPtr(src, j);
-        uint8_t *dstp = vsapi->getWritePtr(dst, j);
-        const int src_pitch = vsapi->getStride(src, j);
-        const int dst_pitch = vsapi->getStride(dst, j);
-        const uint8_t *tp = vsapi->getReadPtr(pp, j);
-        const int tp_pitch = vsapi->getStride(pp, j);
+        const PixelType *srcp = (const PixelType *)vsapi->getReadPtr(src, j);
+        PixelType *dstp = (PixelType *)vsapi->getWritePtr(dst, j);
+        const int src_pitch = vsapi->getStride(src, j) / sizeof(PixelType);
+        const int dst_pitch = vsapi->getStride(dst, j) / sizeof(PixelType);
+        const PixelType *tp = (const PixelType *)vsapi->getReadPtr(pp, j);
+        const int tp_pitch = vsapi->getStride(pp, j) / sizeof(PixelType);
         const int width = vsapi->getFrameWidth(src, j);
         const int height = vsapi->getFrameHeight(src, j);
         const int diameter = d->diameter[j];
@@ -520,14 +520,14 @@ static void ProcessFrameD2_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
         int stopy = radius;
         int startyr = radius * diameter;
         const double *spatialWeights = d->spatialWeights[j];
-        const double *diffWeights = d->diffWeights[j];
-        const uint8_t *srcp_saved = srcp;
+        const double *diffWeights = d->diffWeights[j] + pixel_max * 2;
+        const PixelType *srcp_saved = srcp;
         int starty = 0;
         const int midP = width - radius;
         const int midPY = height - radius;
         int y;
         for (y = 0; y < radius; ++y, startyr -= diameter, ++stopy) {
-            const uint8_t *srcpT_saved = srcp_saved + starty * src_pitch;
+            const PixelType *srcpT_saved = srcp_saved + starty * src_pitch;
             int startx = 0;
             int startxr = radius;
             int stopx = radius;
@@ -535,8 +535,8 @@ static void ProcessFrameD2_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
             for (x = 0; x < radius; ++x, --startxr, ++stopx) {
                 double weightedSum = 0.0;
                 double sumOfWeights = 0.0;
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -555,8 +555,8 @@ static void ProcessFrameD2_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
             for (; x < midP; ++x, ++startx, ++stopx) {
                 double weightedSum = 0.0;
                 double sumOfWeights = 0.0;
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -575,8 +575,8 @@ static void ProcessFrameD2_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
             for (--stopx; x < width; ++x, ++startx) {
                 double weightedSum = 0.0;
                 double sumOfWeights = 0.0;
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -597,8 +597,8 @@ static void ProcessFrameD2_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
             tp += tp_pitch;
         }
         for (; y < midPY; ++y, ++starty, ++stopy) {
-            const uint8_t *srcpT_saved = srcp_saved + starty * src_pitch;
-            const uint8_t *srcpT2_saved = srcp_saved + stopy * src_pitch;
+            const PixelType *srcpT_saved = srcp_saved + starty * src_pitch;
+            const PixelType *srcpT2_saved = srcp_saved + stopy * src_pitch;
             int startx = 0;
             int startxr = radius;
             int stopx = radius;
@@ -606,8 +606,8 @@ static void ProcessFrameD2_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
             for (x = 0; x < radius; ++x, --startxr, ++stopx) {
                 double weightedSum = 0.0;
                 double sumOfWeights = 0.0;
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -627,9 +627,9 @@ static void ProcessFrameD2_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
             {
                 double weightedSum = 0.0;
                 double sumOfWeights = 0.0;
-                const uint8_t *srcpT = srcpT_saved;
-                const uint8_t *srcpT2 = srcpT2_saved;
-                const int cP = (tp[x] + 255) << 1;
+                const PixelType *srcpT = srcpT_saved;
+                const PixelType *srcpT2 = srcpT2_saved;
+                const int cP = tp[x] << 1;
                 int w = 0;
                 for (int u = starty; u <= stopy; ++u) {
                     int b = stopx;
@@ -649,8 +649,8 @@ static void ProcessFrameD2_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
             for (--stopx; x < width; ++x, ++startx) {
                 double weightedSum = 0.0;
                 double sumOfWeights = 0.0;
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -672,7 +672,7 @@ static void ProcessFrameD2_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
             tp += tp_pitch;
         }
         for (--stopy; y < height; ++y, ++starty) {
-            const uint8_t *srcpT_saved = srcp_saved + starty * src_pitch;
+            const PixelType *srcpT_saved = srcp_saved + starty * src_pitch;
             int startx = 0;
             int startxr = radius;
             int stopx = radius;
@@ -680,8 +680,8 @@ static void ProcessFrameD2_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
             for (x = 0; x < radius; ++x, --startxr, ++stopx) {
                 double weightedSum = 0.0;
                 double sumOfWeights = 0.0;
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -701,8 +701,8 @@ static void ProcessFrameD2_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
             for (; x < midP; ++x, ++startx, ++stopx) {
                 double weightedSum = 0.0;
                 double sumOfWeights = 0.0;
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -722,8 +722,8 @@ static void ProcessFrameD2_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
             for (--stopx; x < width; ++x, ++startx) {
                 double weightedSum = 0.0;
                 double sumOfWeights = 0.0;
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -748,17 +748,20 @@ static void ProcessFrameD2_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
 }
 
 
+template <typename PixelType>
 static void ProcessFrameD2_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFrameRef *dst, const TBilateralData *d, const VSAPI *vsapi) {
+    const int pixel_max = d->pixel_max;
+
     for (int j = 0; j < 3; ++j) {
         if (!d->process[j])
             continue;
 
-        const uint8_t *srcp = vsapi->getReadPtr(src, j);
-        uint8_t *dstp = vsapi->getWritePtr(dst, j);
-        const int src_pitch = vsapi->getStride(src, j);
-        const int dst_pitch = vsapi->getStride(dst, j);
-        const uint8_t *tp = vsapi->getReadPtr(pp, j);
-        const int tp_pitch = vsapi->getStride(pp, j);
+        const PixelType *srcp = (const PixelType *)vsapi->getReadPtr(src, j);
+        PixelType *dstp = (PixelType *)vsapi->getWritePtr(dst, j);
+        const int src_pitch = vsapi->getStride(src, j) / sizeof(PixelType);
+        const int dst_pitch = vsapi->getStride(dst, j) / sizeof(PixelType);
+        const PixelType *tp = (const PixelType *)vsapi->getReadPtr(pp, j);
+        const int tp_pitch = vsapi->getStride(pp, j) / sizeof(PixelType);
         const int width = vsapi->getFrameWidth(src, j);
         const int height = vsapi->getFrameHeight(src, j);
         const int diameter = d->diameter[j];
@@ -766,20 +769,20 @@ static void ProcessFrameD2_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
         int stopy = radius;
         int startyr = radius * diameter;
         const double *spatialWeights = d->spatialWeights[j];
-        const double *diffWeights = d->diffWeights[j];
+        const double *diffWeights = d->diffWeights[j] + pixel_max * 2;
 
         const size_t wda = diameter * diameter * sizeof(double);
 
         double *pixels = vs_aligned_malloc<double>(wda, 16);
         double *weights = vs_aligned_malloc<double>(wda, 16);
 
-        const uint8_t *srcp_saved = srcp;
+        const PixelType *srcp_saved = srcp;
         int starty = 0;
         const int midP = width - radius;
         const int midPY = height - radius;
         int y;
         for (y = 0; y < radius; ++y, startyr -= diameter, ++stopy) {
-            const uint8_t *srcpT_saved = srcp_saved + starty * src_pitch;
+            const PixelType *srcpT_saved = srcp_saved + starty * src_pitch;
             int startx = 0;
             int startxr = radius;
             int stopx = radius;
@@ -788,8 +791,8 @@ static void ProcessFrameD2_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 double sumOfWeights = 0.0;
                 memset(pixels, 0, wda);
                 memset(weights, 0, wda);
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -811,8 +814,8 @@ static void ProcessFrameD2_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 double sumOfWeights = 0.0;
                 memset(pixels, 0, wda);
                 memset(weights, 0, wda);
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -834,8 +837,8 @@ static void ProcessFrameD2_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 double sumOfWeights = 0.0;
                 memset(pixels, 0, wda);
                 memset(weights, 0, wda);
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -858,8 +861,8 @@ static void ProcessFrameD2_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             tp += tp_pitch;
         }
         for (; y < midPY; ++y, ++starty, ++stopy) {
-            const uint8_t *srcpT_saved = srcp_saved + starty * src_pitch;
-            const uint8_t *srcpT2_saved = srcp_saved + stopy * src_pitch;
+            const PixelType *srcpT_saved = srcp_saved + starty * src_pitch;
+            const PixelType *srcpT2_saved = srcp_saved + stopy * src_pitch;
             int startx = 0;
             int startxr = radius;
             int stopx = radius;
@@ -868,8 +871,8 @@ static void ProcessFrameD2_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 double sumOfWeights = 0.0;
                 memset(pixels, 0, wda);
                 memset(weights, 0, wda);
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -892,9 +895,9 @@ static void ProcessFrameD2_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 double sumOfWeights = 0.0;
                 memset(pixels, 0, wda);
                 memset(weights, 0, wda);
-                const uint8_t *srcpT = srcpT_saved;
-                const uint8_t *srcpT2 = srcpT2_saved;
-                const int cP = (tp[x] + 255) << 1;
+                const PixelType *srcpT = srcpT_saved;
+                const PixelType *srcpT2 = srcpT2_saved;
+                const int cP = tp[x] << 1;
                 int w = 0;
                 for (int u = starty; u <= stopy; ++u) {
                     int b = stopx;
@@ -917,8 +920,8 @@ static void ProcessFrameD2_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 double sumOfWeights = 0.0;
                 memset(pixels, 0, wda);
                 memset(weights, 0, wda);
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -941,7 +944,7 @@ static void ProcessFrameD2_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             tp += tp_pitch;
         }
         for (--stopy; y < height; ++y, ++starty) {
-            const uint8_t *srcpT_saved = srcp_saved + starty * src_pitch;
+            const PixelType *srcpT_saved = srcp_saved + starty * src_pitch;
             int startx = 0;
             int startxr = radius;
             int stopx = radius;
@@ -950,8 +953,8 @@ static void ProcessFrameD2_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 double sumOfWeights = 0.0;
                 memset(pixels, 0, wda);
                 memset(weights, 0, wda);
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -973,8 +976,8 @@ static void ProcessFrameD2_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 double sumOfWeights = 0.0;
                 memset(pixels, 0, wda);
                 memset(weights, 0, wda);
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -996,8 +999,8 @@ static void ProcessFrameD2_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 double sumOfWeights = 0.0;
                 memset(pixels, 0, wda);
                 memset(weights, 0, wda);
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1026,21 +1029,25 @@ static void ProcessFrameD2_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
 }
 
 
+template <typename PixelType>
 static void ProcessFrameD2_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFrameRef *dst, const TBilateralData *d, const VSAPI *vsapi) {
     const bool cw = d->resType == CWMedian;
 
-    double *medA = vs_aligned_malloc<double>(256 * sizeof(double), 16);
+    const int pixel_max = d->pixel_max;
+
+    size_t medAsize = (pixel_max + 1) * sizeof(double);
+    double *medA = vs_aligned_malloc<double>(medAsize, 16);
 
     for (int j = 0; j < 3; ++j) {
         if (!d->process[j])
             continue;
 
-        const uint8_t *srcp = vsapi->getReadPtr(src, j);
-        uint8_t *dstp = vsapi->getWritePtr(dst, j);
-        const int src_pitch = vsapi->getStride(src, j);
-        const int dst_pitch = vsapi->getStride(dst, j);
-        const uint8_t *tp = vsapi->getReadPtr(pp, j);
-        const int tp_pitch = vsapi->getStride(pp, j);
+        const PixelType *srcp = (const PixelType *)vsapi->getReadPtr(src, j);
+        PixelType *dstp = (PixelType *)vsapi->getWritePtr(dst, j);
+        const int src_pitch = vsapi->getStride(src, j) / sizeof(PixelType);
+        const int dst_pitch = vsapi->getStride(dst, j) / sizeof(PixelType);
+        const PixelType *tp = (const PixelType *)vsapi->getReadPtr(pp, j);
+        const int tp_pitch = vsapi->getStride(pp, j) / sizeof(PixelType);
         const int width = vsapi->getFrameWidth(src, j);
         const int height = vsapi->getFrameHeight(src, j);
         const int diameter = d->diameter[j];
@@ -1048,16 +1055,17 @@ static void ProcessFrameD2_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
         int stopy = radius;
         int startyr = radius * diameter;
         const double *spatialWeights = d->spatialWeights[j];
-        const double *diffWeights = d->diffWeights[j];
-        const uint8_t *srcp_saved = srcp;
+        const double *diffWeights = d->diffWeights[j] + pixel_max * 2;
+        const PixelType *srcp_saved = srcp;
         int starty = 0;
         const int midP = width - radius;
         const int midPY = height - radius;
         const int mid = diameter * radius + radius;
+        const double cw_weight = spatialWeights[mid] * diffWeights[-pixel_max * 2] * (diameter - 1);
         int y;
 
         for (y = 0; y < radius; ++y, startyr -= diameter, ++stopy) {
-            const uint8_t *srcpT_saved = srcp_saved + starty * src_pitch;
+            const PixelType *srcpT_saved = srcp_saved + starty * src_pitch;
             int startx = 0;
             int startxr = radius;
             int stopx = radius;
@@ -1065,9 +1073,9 @@ static void ProcessFrameD2_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             for (x = 0; x < radius; ++x, --startxr, ++stopx) {
                 double sumOfWeights = 0.0;
                 double sum = 0.0;
-                memset(medA, 0, 256 * sizeof(double));
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                memset(medA, 0, medAsize);
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1080,9 +1088,8 @@ static void ProcessFrameD2_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS) {
                     if (cw) {
-                        const double weight = spatialWeights[mid] * diffWeights[0] * (diameter - 1);
-                        medA[tp[x]] += weight;
-                        sumOfWeights += weight;
+                        medA[tp[x]] += cw_weight;
+                        sumOfWeights += cw_weight;
                     }
                     sumOfWeights *= 0.5;
                     int ws = 0;
@@ -1097,9 +1104,9 @@ static void ProcessFrameD2_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             for (; x < midP; ++x, ++startx, ++stopx) {
                 double sumOfWeights = 0.0;
                 double sum = 0.0;
-                memset(medA, 0, 256 * sizeof(double));
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                memset(medA, 0, medAsize);
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1112,9 +1119,8 @@ static void ProcessFrameD2_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS) {
                     if (cw) {
-                        const double weight = spatialWeights[mid] * diffWeights[0] * (diameter - 1);
-                        medA[tp[x]] += weight;
-                        sumOfWeights += weight;
+                        medA[tp[x]] += cw_weight;
+                        sumOfWeights += cw_weight;
                     }
                     sumOfWeights *= 0.5;
                     int ws = 0;
@@ -1129,9 +1135,9 @@ static void ProcessFrameD2_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             for (--stopx; x < width; ++x, ++startx) {
                 double sumOfWeights = 0.0;
                 double sum = 0.0;
-                memset(medA, 0, 256 * sizeof(double));
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                memset(medA, 0, medAsize);
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1144,9 +1150,8 @@ static void ProcessFrameD2_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS) {
                     if (cw) {
-                        const double weight = spatialWeights[mid] * diffWeights[0] * (diameter - 1);
-                        medA[tp[x]] += weight;
-                        sumOfWeights += weight;
+                        medA[tp[x]] += cw_weight;
+                        sumOfWeights += cw_weight;
                     }
                     sumOfWeights *= 0.5;
                     int ws = 0;
@@ -1163,8 +1168,8 @@ static void ProcessFrameD2_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             tp += tp_pitch;
         }
         for (; y < midPY; ++y, ++starty, ++stopy) {
-            const uint8_t *srcpT_saved = srcp_saved + starty * src_pitch;
-            const uint8_t *srcpT2_saved = srcp_saved + stopy * src_pitch;
+            const PixelType *srcpT_saved = srcp_saved + starty * src_pitch;
+            const PixelType *srcpT2_saved = srcp_saved + stopy * src_pitch;
             int startx = 0;
             int startxr = radius;
             int stopx = radius;
@@ -1172,9 +1177,9 @@ static void ProcessFrameD2_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             for (x = 0; x < radius; ++x, --startxr, ++stopx) {
                 double sumOfWeights = 0.0;
                 double sum = 0.0;
-                memset(medA, 0, 256 * sizeof(double));
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                memset(medA, 0, medAsize);
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1187,9 +1192,8 @@ static void ProcessFrameD2_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS) {
                     if (cw) {
-                        const double weight = spatialWeights[mid] * diffWeights[0] * (diameter - 1);
-                        medA[tp[x]] += weight;
-                        sumOfWeights += weight;
+                        medA[tp[x]] += cw_weight;
+                        sumOfWeights += cw_weight;
                     }
                     sumOfWeights *= 0.5;
                     int ws = 0;
@@ -1205,10 +1209,10 @@ static void ProcessFrameD2_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             {
                 double sumOfWeights = 0.0;
                 double sum = 0.0;
-                memset(medA, 0, 256 * sizeof(double));
-                const uint8_t *srcpT = srcpT_saved;
-                const uint8_t *srcpT2 = srcpT2_saved;
-                const int cP = (tp[x] + 255) << 1;
+                memset(medA, 0, medAsize);
+                const PixelType *srcpT = srcpT_saved;
+                const PixelType *srcpT2 = srcpT2_saved;
+                const int cP = tp[x] << 1;
                 int w = 0;
                 for (int u = starty; u <= stopy; ++u) {
                     int b = stopx;
@@ -1222,9 +1226,8 @@ static void ProcessFrameD2_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS) {
                     if (cw) {
-                        const double weight = spatialWeights[mid] * diffWeights[0] * (diameter - 1);
-                        medA[tp[x]] += weight;
-                        sumOfWeights += weight;
+                        medA[tp[x]] += cw_weight;
+                        sumOfWeights += cw_weight;
                     }
                     sumOfWeights *= 0.5;
                     int ws = 0;
@@ -1239,9 +1242,9 @@ static void ProcessFrameD2_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             for (--stopx; x < width; ++x, ++startx) {
                 double sumOfWeights = 0.0;
                 double sum = 0.0;
-                memset(medA, 0, 256 * sizeof(double));
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                memset(medA, 0, medAsize);
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1254,9 +1257,8 @@ static void ProcessFrameD2_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS) {
                     if (cw) {
-                        const double weight = spatialWeights[mid] * diffWeights[0] * (diameter - 1);
-                        medA[tp[x]] += weight;
-                        sumOfWeights += weight;
+                        medA[tp[x]] += cw_weight;
+                        sumOfWeights += cw_weight;
                     }
                     sumOfWeights *= 0.5;
                     int ws = 0;
@@ -1273,7 +1275,7 @@ static void ProcessFrameD2_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             tp += tp_pitch;
         }
         for (--stopy; y < height; ++y, ++starty) {
-            const uint8_t *srcpT_saved = srcp_saved + starty * src_pitch;
+            const PixelType *srcpT_saved = srcp_saved + starty * src_pitch;
             int startx = 0;
             int startxr = radius;
             int stopx = radius;
@@ -1281,9 +1283,9 @@ static void ProcessFrameD2_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             for (x = 0; x < radius; ++x, --startxr, ++stopx) {
                 double sumOfWeights = 0.0;
                 double sum = 0.0;
-                memset(medA, 0, 256 * sizeof(double));
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                memset(medA, 0, medAsize);
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1296,9 +1298,8 @@ static void ProcessFrameD2_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS) {
                     if (cw) {
-                        const double weight = spatialWeights[mid] * diffWeights[0] * (diameter - 1);
-                        medA[tp[x]] += weight;
-                        sumOfWeights += weight;
+                        medA[tp[x]] += cw_weight;
+                        sumOfWeights += cw_weight;
                     }
                     sumOfWeights *= 0.5;
                     int ws = 0;
@@ -1313,9 +1314,9 @@ static void ProcessFrameD2_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             for (; x < midP; ++x, ++startx, ++stopx) {
                 double sumOfWeights = 0.0;
                 double sum = 0.0;
-                memset(medA, 0, 256 * sizeof(double));
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                memset(medA, 0, medAsize);
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1328,9 +1329,8 @@ static void ProcessFrameD2_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS) {
                     if (cw) {
-                        const double weight = spatialWeights[mid] * diffWeights[0] * (diameter - 1);
-                        medA[tp[x]] += weight;
-                        sumOfWeights += weight;
+                        medA[tp[x]] += cw_weight;
+                        sumOfWeights += cw_weight;
                     }
                     sumOfWeights *= 0.5;
                     int ws = 0;
@@ -1345,9 +1345,9 @@ static void ProcessFrameD2_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             for (--stopx; x < width; ++x, ++startx) {
                 double sumOfWeights = 0.0;
                 double sum = 0.0;
-                memset(medA, 0, 256 * sizeof(double));
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                memset(medA, 0, medAsize);
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1360,9 +1360,8 @@ static void ProcessFrameD2_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS) {
                     if (cw) {
-                        const double weight = spatialWeights[mid] * diffWeights[0] * (diameter - 1);
-                        medA[tp[x]] += weight;
-                        sumOfWeights += weight;
+                        medA[tp[x]] += cw_weight;
+                        sumOfWeights += cw_weight;
                     }
                     sumOfWeights *= 0.5;
                     int ws = 0;
@@ -1384,17 +1383,20 @@ static void ProcessFrameD2_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
 }
 
 
+template <typename PixelType>
 static void ProcessFrameD1_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSFrameRef *dst, const TBilateralData *d, const VSAPI *vsapi) {
+    const int pixel_max = d->pixel_max;
+
     for (int j = 0; j < 3; ++j) {
         if (!d->process[j])
             continue;
 
-        const uint8_t *srcp = vsapi->getReadPtr(src, j);
-        uint8_t *dstp = vsapi->getWritePtr(dst, j);
-        const int src_pitch = vsapi->getStride(src, j);
-        const int dst_pitch = vsapi->getStride(dst, j);
-        const uint8_t *tp = vsapi->getReadPtr(pp, j);
-        const int tp_pitch = vsapi->getStride(pp, j);
+        const PixelType *srcp = (const PixelType *)vsapi->getReadPtr(src, j);
+        PixelType *dstp = (PixelType *)vsapi->getWritePtr(dst, j);
+        const int src_pitch = vsapi->getStride(src, j) / sizeof(PixelType);
+        const int dst_pitch = vsapi->getStride(dst, j) / sizeof(PixelType);
+        const PixelType *tp = (const PixelType *)vsapi->getReadPtr(pp, j);
+        const int tp_pitch = vsapi->getStride(pp, j) / sizeof(PixelType);
         const int width = vsapi->getFrameWidth(src, j);
         const int height = vsapi->getFrameHeight(src, j);
         const int diameter = d->diameter[j];
@@ -1402,14 +1404,14 @@ static void ProcessFrameD1_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
         int stopy = radius;
         int startyr = radius * diameter;
         const double *spatialWeights = d->spatialWeights[j];
-        const double *diffWeights = d->diffWeights[j];
-        const uint8_t *srcp_saved = srcp;
+        const double *diffWeights = d->diffWeights[j] + pixel_max;
+        const PixelType *srcp_saved = srcp;
         int starty = 0;
         const int midP = width - radius;
         const int midPY = height - radius;
         int y;
         for (y = 0; y < radius; ++y, startyr -= diameter, ++stopy) {
-            const uint8_t *srcpT_saved = srcp_saved + starty * src_pitch;
+            const PixelType *srcpT_saved = srcp_saved + starty * src_pitch;
             int startx = 0;
             int startxr = radius;
             int stopx = radius;
@@ -1417,8 +1419,8 @@ static void ProcessFrameD1_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
             for (x = 0; x < radius; ++x, --startxr, ++stopx) {
                 double weightedSum = 0.0;
                 double sumOfWeights = 0.0;
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1437,8 +1439,8 @@ static void ProcessFrameD1_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
             for (; x < midP; ++x, ++startx, ++stopx) {
                 double weightedSum = 0.0;
                 double sumOfWeights = 0.0;
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1457,8 +1459,8 @@ static void ProcessFrameD1_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
             for (--stopx; x < width; ++x, ++startx) {
                 double weightedSum = 0.0;
                 double sumOfWeights = 0.0;
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1479,7 +1481,7 @@ static void ProcessFrameD1_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
             tp += tp_pitch;
         }
         for (; y < midPY; ++y, ++starty, ++stopy) {
-            const uint8_t *srcpT_saved = srcp_saved + starty * src_pitch;
+            const PixelType *srcpT_saved = srcp_saved + starty * src_pitch;
             int startx = 0;
             int startxr = radius;
             int stopx = radius;
@@ -1487,8 +1489,8 @@ static void ProcessFrameD1_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
             for (x = 0; x < radius; ++x, --startxr, ++stopx) {
                 double weightedSum = 0.0;
                 double sumOfWeights = 0.0;
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1508,8 +1510,8 @@ static void ProcessFrameD1_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
             {
                 double weightedSum = 0.0;
                 double sumOfWeights = 0.0;
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = 0;
                 for (int u = starty; u <= stopy; ++u) {
                     for (int v = startx; v <= stopx; ++v, ++w) {
@@ -1527,8 +1529,8 @@ static void ProcessFrameD1_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
             for (--stopx; x < width; ++x, ++startx) {
                 double weightedSum = 0.0;
                 double sumOfWeights = 0.0;
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1549,7 +1551,7 @@ static void ProcessFrameD1_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
             tp += tp_pitch;
         }
         for (--stopy; y < height; ++y, ++starty) {
-            const uint8_t *srcpT_saved = srcp_saved + starty * src_pitch;
+            const PixelType *srcpT_saved = srcp_saved + starty * src_pitch;
             int startx = 0;
             int startxr = radius;
             int stopx = radius;
@@ -1557,8 +1559,8 @@ static void ProcessFrameD1_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
             for (x = 0; x < radius; ++x, --startxr, ++stopx) {
                 double weightedSum = 0.0;
                 double sumOfWeights = 0.0;
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1577,8 +1579,8 @@ static void ProcessFrameD1_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
             for (; x < midP; ++x, ++startx, ++stopx) {
                 double weightedSum = 0.0;
                 double sumOfWeights = 0.0;
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1597,8 +1599,8 @@ static void ProcessFrameD1_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
             for (--stopx; x < width; ++x, ++startx) {
                 double weightedSum = 0.0;
                 double sumOfWeights = 0.0;
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1622,17 +1624,20 @@ static void ProcessFrameD1_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSF
 }
 
 
+template <typename PixelType>
 static void ProcessFrameD1_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFrameRef *dst, const TBilateralData *d, const VSAPI *vsapi) {
+    const int pixel_max = d->pixel_max;
+
     for (int j = 0; j < 3; ++j) {
         if (!d->process[j])
             continue;
 
-        const uint8_t *srcp = vsapi->getReadPtr(src, j);
-        uint8_t *dstp = vsapi->getWritePtr(dst, j);
-        const int src_pitch = vsapi->getStride(src, j);
-        const int dst_pitch = vsapi->getStride(dst, j);
-        const uint8_t *tp = vsapi->getReadPtr(pp, j);
-        const int tp_pitch = vsapi->getStride(pp, j);
+        const PixelType *srcp = (const PixelType *)vsapi->getReadPtr(src, j);
+        PixelType *dstp = (PixelType *)vsapi->getWritePtr(dst, j);
+        const int src_pitch = vsapi->getStride(src, j) / sizeof(PixelType);
+        const int dst_pitch = vsapi->getStride(dst, j) / sizeof(PixelType);
+        const PixelType *tp = (const PixelType *)vsapi->getReadPtr(pp, j);
+        const int tp_pitch = vsapi->getStride(pp, j) / sizeof(PixelType);
         const int width = vsapi->getFrameWidth(src, j);
         const int height = vsapi->getFrameHeight(src, j);
         const int diameter = d->diameter[j];
@@ -1640,20 +1645,20 @@ static void ProcessFrameD1_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
         int stopy = radius;
         int startyr = radius * diameter;
         const double *spatialWeights = d->spatialWeights[j];
-        const double *diffWeights = d->diffWeights[j];
+        const double *diffWeights = d->diffWeights[j] + pixel_max;
 
         const size_t wda = diameter * diameter * sizeof(double);
 
         double *pixels = vs_aligned_malloc<double>(wda, 16);
         double *weights = vs_aligned_malloc<double>(wda, 16);
 
-        const uint8_t *srcp_saved = srcp;
+        const PixelType *srcp_saved = srcp;
         int starty = 0;
         const int midP = width - radius;
         const int midPY = height - radius;
         int y;
         for (y = 0; y < radius; ++y, startyr -= diameter, ++stopy) {
-            const uint8_t *srcpT_saved = srcp_saved + starty * src_pitch;
+            const PixelType *srcpT_saved = srcp_saved + starty * src_pitch;
             int startx = 0;
             int startxr = radius;
             int stopx = radius;
@@ -1662,8 +1667,8 @@ static void ProcessFrameD1_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 double sumOfWeights = 0.0;
                 memset(pixels, 0, wda);
                 memset(weights, 0, wda);
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1685,8 +1690,8 @@ static void ProcessFrameD1_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 double sumOfWeights = 0.0;
                 memset(pixels, 0, wda);
                 memset(weights, 0, wda);
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1708,8 +1713,8 @@ static void ProcessFrameD1_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 double sumOfWeights = 0.0;
                 memset(pixels, 0, wda);
                 memset(weights, 0, wda);
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1732,7 +1737,7 @@ static void ProcessFrameD1_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             tp += tp_pitch;
         }
         for (; y < midPY; ++y, ++starty, ++stopy) {
-            const uint8_t *srcpT_saved = srcp_saved + starty * src_pitch;
+            const PixelType *srcpT_saved = srcp_saved + starty * src_pitch;
             int startx = 0;
             int startxr = radius;
             int stopx = radius;
@@ -1741,8 +1746,8 @@ static void ProcessFrameD1_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 double sumOfWeights = 0.0;
                 memset(pixels, 0, wda);
                 memset(weights, 0, wda);
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1765,8 +1770,8 @@ static void ProcessFrameD1_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 double sumOfWeights = 0.0;
                 memset(pixels, 0, wda);
                 memset(weights, 0, wda);
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = 0;
                 for (int u = starty; u <= stopy; ++u) {
                     for (int v = startx; v <= stopx; ++v, ++w) {
@@ -1787,8 +1792,8 @@ static void ProcessFrameD1_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 double sumOfWeights = 0.0;
                 memset(pixels, 0, wda);
                 memset(weights, 0, wda);
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1811,7 +1816,7 @@ static void ProcessFrameD1_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             tp += tp_pitch;
         }
         for (--stopy; y < height; ++y, ++starty) {
-            const uint8_t *srcpT_saved = srcp_saved + starty * src_pitch;
+            const PixelType *srcpT_saved = srcp_saved + starty * src_pitch;
             int startx = 0;
             int startxr = radius;
             int stopx = radius;
@@ -1820,8 +1825,8 @@ static void ProcessFrameD1_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 double sumOfWeights = 0.0;
                 memset(pixels, 0, wda);
                 memset(weights, 0, wda);
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1843,8 +1848,8 @@ static void ProcessFrameD1_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 double sumOfWeights = 0.0;
                 memset(pixels, 0, wda);
                 memset(weights, 0, wda);
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1866,8 +1871,8 @@ static void ProcessFrameD1_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 double sumOfWeights = 0.0;
                 memset(pixels, 0, wda);
                 memset(weights, 0, wda);
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1896,21 +1901,25 @@ static void ProcessFrameD1_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
 }
 
 
+template <typename PixelType>
 static void ProcessFrameD1_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFrameRef *dst, const TBilateralData *d, const VSAPI *vsapi) {
     const bool cw = d->resType == CWMedian;
 
-    double *medA = vs_aligned_malloc<double>(256 * sizeof(double), 16);
+    const int pixel_max = d->pixel_max;
+
+    size_t medAsize = (pixel_max + 1) * sizeof(double);
+    double *medA = vs_aligned_malloc<double>(medAsize, 16);
 
     for (int j = 0; j < 3; ++j) {
         if (!d->process[j])
             continue;
 
-        const uint8_t *srcp = vsapi->getReadPtr(src, j);
-        uint8_t *dstp = vsapi->getWritePtr(dst, j);
-        const int src_pitch = vsapi->getStride(src, j);
-        const int dst_pitch = vsapi->getStride(dst, j);
-        const uint8_t *tp = vsapi->getReadPtr(pp, j);
-        const int tp_pitch = vsapi->getStride(pp, j);
+        const PixelType *srcp = (const PixelType *)vsapi->getReadPtr(src, j);
+        PixelType *dstp = (PixelType *)vsapi->getWritePtr(dst, j);
+        const int src_pitch = vsapi->getStride(src, j) / sizeof(PixelType);
+        const int dst_pitch = vsapi->getStride(dst, j) / sizeof(PixelType);
+        const PixelType *tp = (const PixelType *)vsapi->getReadPtr(pp, j);
+        const int tp_pitch = vsapi->getStride(pp, j) / sizeof(PixelType);
         const int width = vsapi->getFrameWidth(src, j);
         const int height = vsapi->getFrameHeight(src, j);
         const int diameter = d->diameter[j];
@@ -1918,15 +1927,16 @@ static void ProcessFrameD1_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
         int stopy = radius;
         int startyr = radius * diameter;
         const double *spatialWeights = d->spatialWeights[j];
-        const double *diffWeights = d->diffWeights[j];
-        const uint8_t *srcp_saved = srcp;
+        const double *diffWeights = d->diffWeights[j] + pixel_max;
+        const PixelType *srcp_saved = srcp;
         int starty = 0;
         const int midP = width - radius;
         const int midPY = height - radius;
         const int mid = diameter * radius + radius;
+        const double cw_weight = spatialWeights[mid] * diffWeights[-pixel_max] * (diameter - 1);
         int y;
         for (y = 0; y < radius; ++y, startyr -= diameter, ++stopy) {
-            const uint8_t *srcpT_saved = srcp_saved + starty * src_pitch;
+            const PixelType *srcpT_saved = srcp_saved + starty * src_pitch;
             int startx = 0;
             int startxr = radius;
             int stopx = radius;
@@ -1934,9 +1944,9 @@ static void ProcessFrameD1_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             for (x = 0; x < radius; ++x, --startxr, ++stopx) {
                 double sumOfWeights = 0.0;
                 double sum = 0.0;
-                memset(medA, 0, 256 * sizeof(double));
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                memset(medA, 0, medAsize);
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1949,9 +1959,8 @@ static void ProcessFrameD1_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS) {
                     if (cw) {
-                        const double weight = spatialWeights[mid] * diffWeights[0] * (diameter - 1);
-                        medA[tp[x]] += weight;
-                        sumOfWeights += weight;
+                        medA[tp[x]] += cw_weight;
+                        sumOfWeights += cw_weight;
                     }
                     sumOfWeights *= 0.5;
                     int ws = 0;
@@ -1966,9 +1975,9 @@ static void ProcessFrameD1_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             for (; x < midP; ++x, ++startx, ++stopx) {
                 double sumOfWeights = 0.0;
                 double sum = 0.0;
-                memset(medA, 0, 256 * sizeof(double));
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                memset(medA, 0, medAsize);
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -1981,9 +1990,8 @@ static void ProcessFrameD1_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS) {
                     if (cw) {
-                        const double weight = spatialWeights[mid] * diffWeights[0] * (diameter - 1);
-                        medA[tp[x]] += weight;
-                        sumOfWeights += weight;
+                        medA[tp[x]] += cw_weight;
+                        sumOfWeights += cw_weight;
                     }
                     sumOfWeights *= 0.5;
                     int ws = 0;
@@ -1998,9 +2006,9 @@ static void ProcessFrameD1_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             for (--stopx; x < width; ++x, ++startx) {
                 double sumOfWeights = 0.0;
                 double sum = 0.0;
-                memset(medA, 0, 256 * sizeof(double));
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                memset(medA, 0, medAsize);
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -2013,9 +2021,8 @@ static void ProcessFrameD1_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS) {
                     if (cw) {
-                        const double weight = spatialWeights[mid] * diffWeights[0] * (diameter - 1);
-                        medA[tp[x]] += weight;
-                        sumOfWeights += weight;
+                        medA[tp[x]] += cw_weight;
+                        sumOfWeights += cw_weight;
                     }
                     sumOfWeights *= 0.5;
                     int ws = 0;
@@ -2032,7 +2039,7 @@ static void ProcessFrameD1_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             tp += tp_pitch;
         }
         for (; y < midPY; ++y, ++starty, ++stopy) {
-            const uint8_t *srcpT_saved = srcp_saved + starty * src_pitch;
+            const PixelType *srcpT_saved = srcp_saved + starty * src_pitch;
             int startx = 0;
             int startxr = radius;
             int stopx = radius;
@@ -2040,9 +2047,9 @@ static void ProcessFrameD1_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             for (x = 0; x < radius; ++x, --startxr, ++stopx) {
                 double sumOfWeights = 0.0;
                 double sum = 0.0;
-                memset(medA, 0, 256 * sizeof(double));
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                memset(medA, 0, medAsize);
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -2055,9 +2062,8 @@ static void ProcessFrameD1_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS) {
                     if (cw) {
-                        const double weight = spatialWeights[mid] * diffWeights[0] * (diameter - 1);
-                        medA[tp[x]] += weight;
-                        sumOfWeights += weight;
+                        medA[tp[x]] += cw_weight;
+                        sumOfWeights += cw_weight;
                     }
                     sumOfWeights *= 0.5;
                     int ws = 0;
@@ -2073,9 +2079,9 @@ static void ProcessFrameD1_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             {
                 double sumOfWeights = 0.0;
                 double sum = 0.0;
-                memset(medA, 0, 256 * sizeof(double));
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                memset(medA, 0, medAsize);
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = 0;
                 for (int u = starty; u <= stopy; ++u) {
                     for (int v = startx; v <= stopx; ++v, ++w) {
@@ -2087,9 +2093,8 @@ static void ProcessFrameD1_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS) {
                     if (cw) {
-                        const double weight = spatialWeights[mid] * diffWeights[0] * (diameter - 1);
-                        medA[tp[x]] += weight;
-                        sumOfWeights += weight;
+                        medA[tp[x]] += cw_weight;
+                        sumOfWeights += cw_weight;
                     }
                     sumOfWeights *= 0.5;
                     int ws = 0;
@@ -2104,9 +2109,9 @@ static void ProcessFrameD1_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             for (--stopx; x < width; ++x, ++startx) {
                 double sumOfWeights = 0.0;
                 double sum = 0.0;
-                memset(medA, 0, 256 * sizeof(double));
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                memset(medA, 0, medAsize);
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -2119,9 +2124,8 @@ static void ProcessFrameD1_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS) {
                     if (cw) {
-                        const double weight = spatialWeights[mid] * diffWeights[0] * (diameter - 1);
-                        medA[tp[x]] += weight;
-                        sumOfWeights += weight;
+                        medA[tp[x]] += cw_weight;
+                        sumOfWeights += cw_weight;
                     }
                     sumOfWeights *= 0.5;
                     int ws = 0;
@@ -2138,7 +2142,7 @@ static void ProcessFrameD1_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             tp += tp_pitch;
         }
         for (--stopy; y < height; ++y, ++starty) {
-            const uint8_t *srcpT_saved = srcp_saved + starty * src_pitch;
+            const PixelType *srcpT_saved = srcp_saved + starty * src_pitch;
             int startx = 0;
             int startxr = radius;
             int stopx = radius;
@@ -2146,9 +2150,9 @@ static void ProcessFrameD1_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             for (x = 0; x < radius; ++x, --startxr, ++stopx) {
                 double sumOfWeights = 0.0;
                 double sum = 0.0;
-                memset(medA, 0, 256 * sizeof(double));
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                memset(medA, 0, medAsize);
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -2161,9 +2165,8 @@ static void ProcessFrameD1_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS) {
                     if (cw) {
-                        const double weight = spatialWeights[mid] * diffWeights[0] * (diameter - 1);
-                        medA[tp[x]] += weight;
-                        sumOfWeights += weight;
+                        medA[tp[x]] += cw_weight;
+                        sumOfWeights += cw_weight;
                     }
                     sumOfWeights *= 0.5;
                     int ws = 0;
@@ -2178,9 +2181,9 @@ static void ProcessFrameD1_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             for (; x < midP; ++x, ++startx, ++stopx) {
                 double sumOfWeights = 0.0;
                 double sum = 0.0;
-                memset(medA, 0, 256 * sizeof(double));
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                memset(medA, 0, medAsize);
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -2193,9 +2196,8 @@ static void ProcessFrameD1_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS) {
                     if (cw) {
-                        const double weight = spatialWeights[mid] * diffWeights[0] * (diameter - 1);
-                        medA[tp[x]] += weight;
-                        sumOfWeights += weight;
+                        medA[tp[x]] += cw_weight;
+                        sumOfWeights += cw_weight;
                     }
                     sumOfWeights *= 0.5;
                     int ws = 0;
@@ -2210,9 +2212,9 @@ static void ProcessFrameD1_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
             for (--stopx; x < width; ++x, ++startx) {
                 double sumOfWeights = 0.0;
                 double sum = 0.0;
-                memset(medA, 0, 256 * sizeof(double));
-                const uint8_t *srcpT = srcpT_saved;
-                const int cP = tp[x] + 255;
+                memset(medA, 0, medAsize);
+                const PixelType *srcpT = srcpT_saved;
+                const int cP = tp[x];
                 int w = startyr;
                 for (int u = starty; u <= stopy; ++u, w += diameter) {
                     int b = startxr;
@@ -2225,9 +2227,8 @@ static void ProcessFrameD1_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS) {
                     if (cw) {
-                        const double weight = spatialWeights[mid] * diffWeights[0] * (diameter - 1);
-                        medA[tp[x]] += weight;
-                        sumOfWeights += weight;
+                        medA[tp[x]] += cw_weight;
+                        sumOfWeights += cw_weight;
                     }
                     sumOfWeights *= 0.5;
                     int ws = 0;
@@ -2407,8 +2408,8 @@ static void VS_CC TBilateralCreate(const VSMap *in, VSMap *out, void *userData, 
         return;
     }
 
-    if (d.vi->format->bitsPerSample > 8) {
-        vsapi->setError(out, TBILATERAL_FILTER ": clip must be 8 bit.");
+    if (d.vi->format->bitsPerSample > 16 || d.vi->format->sampleType != stInteger) {
+        vsapi->setError(out, TBILATERAL_FILTER ": clip must be 8..16 bit with integer sample type.");
         vsapi->freeNode(d.clip);
         return;
     }
@@ -2502,21 +2503,35 @@ static void VS_CC TBilateralCreate(const VSMap *in, VSMap *out, void *userData, 
     }
 
 
+    int bits = d.vi->format->bitsPerSample;
+
     if (d.d2) {
         if (d.resType == Mean)
-            d.process_frame = ProcessFrameD2_Mean;
+            d.process_frame = bits == 8 ? ProcessFrameD2_Mean<uint8_t>
+                                        : ProcessFrameD2_Mean<uint16_t>;
         else if (d.resType == MultipleLinearRegression)
-            d.process_frame = ProcessFrameD2_MLR;
+            d.process_frame = bits == 8 ? ProcessFrameD2_MLR<uint8_t>
+                                        : ProcessFrameD2_MLR<uint16_t>;
         else
-            d.process_frame = ProcessFrameD2_Med;
+            d.process_frame = bits == 8 ? ProcessFrameD2_Med<uint8_t>
+                                        : ProcessFrameD2_Med<uint16_t>;
     } else {
         if (d.resType == Mean)
-            d.process_frame = ProcessFrameD1_Mean;
+            d.process_frame = bits == 8 ? ProcessFrameD1_Mean<uint8_t>
+                                        : ProcessFrameD1_Mean<uint16_t>;
         else if (d.resType == MultipleLinearRegression)
-            d.process_frame = ProcessFrameD1_MLR;
+            d.process_frame = bits == 8 ? ProcessFrameD1_MLR<uint8_t>
+                                        : ProcessFrameD1_MLR<uint16_t>;
         else
-            d.process_frame = ProcessFrameD1_Med;
+            d.process_frame = bits == 8 ? ProcessFrameD1_Med<uint8_t>
+                                        : ProcessFrameD1_Med<uint16_t>;
     }
+
+
+    d.pixel_max = (1 << bits) - 1;
+
+    for (int i = 0; i < 3; i++)
+        d.iDev[i] = d.iDev[i] * d.pixel_max / 255;
 
 
     buildTables(&d);
