@@ -55,7 +55,6 @@ struct TBilateralData {
 
     double *spatialWeights[3];
     double *diffWeights[3];
-    double *disTable[3];
 
     void (*process_frame)(const VSFrameRef *src, const VSFrameRef *pp, VSFrameRef *dst, const TBilateralData *d, const VSAPI *vsapi);
 };
@@ -118,16 +117,16 @@ static void buildTables(TBilateralData *d) {
         int radius = d->diameter[plane] >> 1;
 
         d->spatialWeights[plane] = vs_aligned_malloc<double>(window * sizeof(double), 16);
-        d->disTable[plane] = vs_aligned_malloc<double>(window * sizeof(double), 16);
+        double *disTable = vs_aligned_malloc<double>(window * sizeof(double), 16);
 
         for (int b = 0, y = -radius; y <= radius; ++y) {
             int temp = y * y;
             for (int x = -radius; x <= radius; ++x)
-                d->disTable[plane][b++] = sqrt((double)(temp + x * x));
+                disTable[b++] = sqrt((double)(temp + x * x));
         }
 
         for (int x = 0; x < window; ++x)
-            d->spatialWeights[plane][x] = kernelValue(d->disTable[plane][x], d->sDev[plane], d->kernS);
+            d->spatialWeights[plane][x] = kernelValue(disTable[x], d->sDev[plane], d->kernS);
         d->spatialWeights[plane][radius * d->diameter[plane] + radius] *= d->cs[plane];
 
         if (!d->d2) {
@@ -141,6 +140,8 @@ static void buildTables(TBilateralData *d) {
             for (int x = 0; x < 511; ++x)
                 d->diffWeights[plane][510 + x] = d->diffWeights[plane][510 - x] = kernelValue(x / 2.0, d->iDev[plane], d->kernI);
         }
+
+        vs_aligned_free(disTable);
     }
 }
 
@@ -151,7 +152,6 @@ static void freeTables(TBilateralData *d) {
             continue;
 
         vs_aligned_free(d->spatialWeights[plane]);
-        vs_aligned_free(d->disTable[plane]);
         vs_aligned_free(d->diffWeights[plane]);
     }
 }
