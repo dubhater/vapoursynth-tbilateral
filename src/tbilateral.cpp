@@ -63,8 +63,7 @@ struct TBilateralData {
 #define MINS 0.00000000000001
 
 
-static double kernelValue(double x, double sigma, int kernel)
-{
+static double kernelValue(double x, double sigma, int kernel) {
     switch (kernel) {
         case AndrewsWave: // Andrews' wave
             if (x <= sigma)
@@ -503,7 +502,7 @@ static int mlre(double *yi, double *wi, int lw, int lh, int cx, int cy, int radi
 }
 
 
-static void  ProcessFrameD2_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSFrameRef *dst, const TBilateralData *d, const VSAPI *vsapi) {
+static void ProcessFrameD2_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSFrameRef *dst, const TBilateralData *d, const VSAPI *vsapi) {
     for (int j = 0; j < 3; ++j) {
         if (!d->process[j])
             continue;
