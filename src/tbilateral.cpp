@@ -503,7 +503,7 @@ template <typename PixelType>
 static void ProcessFrameD2_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSFrameRef *dst, const TBilateralData *d, const VSAPI *vsapi) {
     const int pixel_max = d->pixel_max;
 
-    for (int j = 0; j < 3; ++j) {
+    for (int j = 0; j < d->vi->format->numPlanes; ++j) {
         if (!d->process[j])
             continue;
 
@@ -752,7 +752,7 @@ template <typename PixelType>
 static void ProcessFrameD2_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFrameRef *dst, const TBilateralData *d, const VSAPI *vsapi) {
     const int pixel_max = d->pixel_max;
 
-    for (int j = 0; j < 3; ++j) {
+    for (int j = 0; j < d->vi->format->numPlanes; ++j) {
         if (!d->process[j])
             continue;
 
@@ -1038,7 +1038,7 @@ static void ProcessFrameD2_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
     size_t medAsize = (pixel_max + 1) * sizeof(double);
     double *medA = vs_aligned_malloc<double>(medAsize, 16);
 
-    for (int j = 0; j < 3; ++j) {
+    for (int j = 0; j < d->vi->format->numPlanes; ++j) {
         if (!d->process[j])
             continue;
 
@@ -1387,7 +1387,7 @@ template <typename PixelType>
 static void ProcessFrameD1_Mean(const VSFrameRef *src, const VSFrameRef *pp, VSFrameRef *dst, const TBilateralData *d, const VSAPI *vsapi) {
     const int pixel_max = d->pixel_max;
 
-    for (int j = 0; j < 3; ++j) {
+    for (int j = 0; j < d->vi->format->numPlanes; ++j) {
         if (!d->process[j])
             continue;
 
@@ -1628,7 +1628,7 @@ template <typename PixelType>
 static void ProcessFrameD1_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFrameRef *dst, const TBilateralData *d, const VSAPI *vsapi) {
     const int pixel_max = d->pixel_max;
 
-    for (int j = 0; j < 3; ++j) {
+    for (int j = 0; j < d->vi->format->numPlanes; ++j) {
         if (!d->process[j])
             continue;
 
@@ -1910,7 +1910,7 @@ static void ProcessFrameD1_Med(const VSFrameRef *src, const VSFrameRef *pp, VSFr
     size_t medAsize = (pixel_max + 1) * sizeof(double);
     double *medA = vs_aligned_malloc<double>(medAsize, 16);
 
-    for (int j = 0; j < 3; ++j) {
+    for (int j = 0; j < d->vi->format->numPlanes; ++j) {
         if (!d->process[j])
             continue;
 
