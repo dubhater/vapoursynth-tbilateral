@@ -373,7 +373,7 @@ static void svdcmp(double *a, double *w, double *v) {
 }
 
 
-static int mlre(double *yi, double *wi, int lw, int lh, int cx, int cy, int radius, int diameter) {
+static int mlre(double *yi, double *wi, int lw, int lh, int cx, int cy, int radius, int diameter, int pixel_max) {
     wi += cy * diameter;
     yi += cy * diameter;
 
@@ -495,7 +495,7 @@ static int mlre(double *yi, double *wi, int lw, int lh, int cx, int cy, int radi
     free(xtlr);
     free(wylr);
 
-    return std::min(std::max(int(blr[0] + blr[1] * (radius - cy) + blr[2] * (radius - cx) + 0.5), 0), 255);
+    return std::min(std::max(int(blr[0] + blr[1] * (radius - cy) + blr[2] * (radius - cx) + 0.5), 0), pixel_max);
 }
 
 
@@ -806,7 +806,7 @@ static void ProcessFrameD2_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS)
                     dstp[x] = mlre(pixels, weights, stopx - startx + 1,
-                                   stopy - starty + 1, startxr, radius + starty - y, radius, diameter);
+                                   stopy - starty + 1, startxr, radius + starty - y, radius, diameter, pixel_max);
                 else
                     dstp[x] = srcp[x];
             }
@@ -829,7 +829,7 @@ static void ProcessFrameD2_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS)
                     dstp[x] = mlre(pixels, weights, diameter,
-                                   stopy - starty + 1, 0, radius + starty - y, radius, diameter);
+                                   stopy - starty + 1, 0, radius + starty - y, radius, diameter, pixel_max);
                 else
                     dstp[x] = srcp[x];
             }
@@ -852,7 +852,7 @@ static void ProcessFrameD2_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS)
                     dstp[x] = mlre(pixels, weights, stopx - startx + 1,
-                                   stopy - starty + 1, startxr, radius + starty - y, radius, diameter);
+                                   stopy - starty + 1, startxr, radius + starty - y, radius, diameter, pixel_max);
                 else
                     dstp[x] = srcp[x];
             }
@@ -886,7 +886,7 @@ static void ProcessFrameD2_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS)
                     dstp[x] = mlre(pixels, weights, stopx - startx + 1,
-                                   diameter, startxr, 0, radius, diameter);
+                                   diameter, startxr, 0, radius, diameter, pixel_max);
                 else
                     dstp[x] = srcp[x];
             }
@@ -912,7 +912,7 @@ static void ProcessFrameD2_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS)
                     dstp[x] = mlre(pixels, weights, diameter,
-                                   diameter, 0, 0, radius, diameter);
+                                   diameter, 0, 0, radius, diameter, pixel_max);
                 else
                     dstp[x] = srcp[x];
             }
@@ -935,7 +935,7 @@ static void ProcessFrameD2_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS)
                     dstp[x] = mlre(pixels, weights, stopx - startx + 1,
-                                   diameter, startxr, 0, radius, diameter);
+                                   diameter, startxr, 0, radius, diameter, pixel_max);
                 else
                     dstp[x] = srcp[x];
             }
@@ -968,7 +968,7 @@ static void ProcessFrameD2_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS)
                     dstp[x] = mlre(pixels, weights, stopx - startx + 1,
-                                   stopy - starty + 1, startxr, radius + starty - y, radius, diameter);
+                                   stopy - starty + 1, startxr, radius + starty - y, radius, diameter, pixel_max);
                 else
                     dstp[x] = srcp[x];
             }
@@ -991,7 +991,7 @@ static void ProcessFrameD2_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS)
                     dstp[x] = mlre(pixels, weights, diameter,
-                                   stopy - starty + 1, 0, radius + starty - y, radius, diameter);
+                                   stopy - starty + 1, 0, radius + starty - y, radius, diameter, pixel_max);
                 else
                     dstp[x] = srcp[x];
             }
@@ -1014,7 +1014,7 @@ static void ProcessFrameD2_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS)
                     dstp[x] = mlre(pixels, weights, stopx - startx + 1,
-                                   stopy - starty + 1, startxr, radius + starty - y, radius, diameter);
+                                   stopy - starty + 1, startxr, radius + starty - y, radius, diameter, pixel_max);
                 else
                     dstp[x] = srcp[x];
             }
@@ -1682,7 +1682,7 @@ static void ProcessFrameD1_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS)
                     dstp[x] = mlre(pixels, weights, stopx - startx + 1,
-                                   stopy - starty + 1, startxr, radius + starty - y, radius, diameter);
+                                   stopy - starty + 1, startxr, radius + starty - y, radius, diameter, pixel_max);
                 else
                     dstp[x] = srcp[x];
             }
@@ -1705,7 +1705,7 @@ static void ProcessFrameD1_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS)
                     dstp[x] = mlre(pixels, weights, diameter,
-                                   stopy - starty + 1, 0, radius + starty - y, radius, diameter);
+                                   stopy - starty + 1, 0, radius + starty - y, radius, diameter, pixel_max);
                 else
                     dstp[x] = srcp[x];
             }
@@ -1728,7 +1728,7 @@ static void ProcessFrameD1_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS)
                     dstp[x] = mlre(pixels, weights, stopx - startx + 1,
-                                   stopy - starty + 1, startxr, radius + starty - y, radius, diameter);
+                                   stopy - starty + 1, startxr, radius + starty - y, radius, diameter, pixel_max);
                 else
                     dstp[x] = srcp[x];
             }
@@ -1761,7 +1761,7 @@ static void ProcessFrameD1_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS)
                     dstp[x] = mlre(pixels, weights, stopx - startx + 1,
-                                   diameter, startxr, 0, radius, diameter);
+                                   diameter, startxr, 0, radius, diameter, pixel_max);
                 else
                     dstp[x] = srcp[x];
             }
@@ -1784,7 +1784,7 @@ static void ProcessFrameD1_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS)
                     dstp[x] = mlre(pixels, weights, diameter,
-                                   diameter, 0, 0, radius, diameter);
+                                   diameter, 0, 0, radius, diameter, pixel_max);
                 else
                     dstp[x] = srcp[x];
             }
@@ -1807,7 +1807,7 @@ static void ProcessFrameD1_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS)
                     dstp[x] = mlre(pixels, weights, stopx - startx + 1,
-                                   diameter, startxr, 0, radius, diameter);
+                                   diameter, startxr, 0, radius, diameter, pixel_max);
                 else
                     dstp[x] = srcp[x];
             }
@@ -1840,7 +1840,7 @@ static void ProcessFrameD1_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS)
                     dstp[x] = mlre(pixels, weights, stopx - startx + 1,
-                                   stopy - starty + 1, startxr, radius + starty - y, radius, diameter);
+                                   stopy - starty + 1, startxr, radius + starty - y, radius, diameter, pixel_max);
                 else
                     dstp[x] = srcp[x];
             }
@@ -1863,7 +1863,7 @@ static void ProcessFrameD1_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS)
                     dstp[x] = mlre(pixels, weights, diameter,
-                                   stopy - starty + 1, 0, radius + starty - y, radius, diameter);
+                                   stopy - starty + 1, 0, radius + starty - y, radius, diameter, pixel_max);
                 else
                     dstp[x] = srcp[x];
             }
@@ -1886,7 +1886,7 @@ static void ProcessFrameD1_MLR(const VSFrameRef *src, const VSFrameRef *pp, VSFr
                 }
                 if (sumOfWeights >= MINS)
                     dstp[x] = mlre(pixels, weights, stopx - startx + 1,
-                                   stopy - starty + 1, startxr, radius + starty - y, radius, diameter);
+                                   stopy - starty + 1, startxr, radius + starty - y, radius, diameter, pixel_max);
                 else
                     dstp[x] = srcp[x];
             }
